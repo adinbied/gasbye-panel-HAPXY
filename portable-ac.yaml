@@ -1,0 +1,126 @@
+substitutions:
+  name: portable-ac
+  friendly_name: Portable AC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  board: nodemcuv2          # HiLetgo NodeMCU CP2102 ESP-12E
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}                    # fallback hotspot if Wi-Fi fails
+  # output_power: 15dB      # uncomment to cut current spikes if the AC's 5 V sags
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    encryption: {}          # reuses the api encryption key
+
+# Hardware UART0 TX (GPIO1) and UART1 TX (GPIO2) are used for the outputs,
+# so serial logging must be off. Logs still stream over Wi-Fi.
+logger:
+  baud_rate: 0
+  level: DEBUG
+
+# The NodeMCU's RX pin (GPIO3) is wired to the USB chip through 470 ohms, which
+# overpowers a resistor divider, so the inputs use plain GPIOs instead and both
+# outputs use hardware UART transmitters (no bit-banged TX).
+uart:
+  # TX (GPIO1, hardware UART0) -> 1k -> Ch0 wire, main board end
+  - id: mainboard_uart
+    tx_pin: GPIO1
+    baud_rate: 9600
+  # Ch1 wire, main board end -> 4.7k/10k divider -> D6 (GPIO12), software RX
+  - id: mainboard_rx_uart
+    rx_pin: GPIO12
+    baud_rate: 9600
+    rx_buffer_size: 256
+  # Ch0 wire, panel end -> 4.7k/10k divider -> D5 (GPIO14), software RX
+  - id: panel_uart
+    rx_pin: GPIO14
+    baud_rate: 9600
+    rx_buffer_size: 256
+  # D4 (GPIO2, hardware UART1) -> 1k -> Ch1 wire, panel end
+  - id: panel_tx_uart
+    tx_pin: GPIO2
+    baud_rate: 9600
+
+climate:
+  - platform: portable_ac
+    id: ac
+    name: None              # entity takes the device name
+    mainboard_uart_id: mainboard_uart
+    mainboard_rx_uart_id: mainboard_rx_uart
+    panel_uart_id: panel_uart
+    panel_tx_uart_id: panel_tx_uart
+    start_in_passthrough: true   # first boot: forward only, no commands
+    hold_override: true
+    # current_temperature_sensor: room_temp   # optional, e.g. a DHT/BME sensor
+    inverter_level:
+      name: Inverter level
+    compressor_running:
+      name: Compressor
+    anti_freeze:
+      name: Anti-freeze flag
+    override_active:
+      name: Home Assistant override
+    coil_temp_raw:
+      name: Coil sensor (raw)
+    sensor_11_raw:
+      name: Sensor 11 (raw)
+    sensor_18_raw:
+      name: Sensor 18 (raw)
+    sensor_21_raw:
+      name: Sensor 21 (raw)
+    sensor_22_raw:
+      name: Sensor 22 (raw)
+    status_23_raw:
+      name: Status 23 (raw)
+    status_24_raw:
+      name: Status 24 (raw)
+
+switch:
+  # Turn this OFF in Home Assistant once you've confirmed pass-through works.
+  - platform: template
+    name: Pass-through only
+    icon: mdi:shield-check
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    lambda: return id(ac).get_passthrough();
+    turn_on_action:
+      - lambda: id(ac).set_passthrough(true);
+    turn_off_action:
+      - lambda: id(ac).set_passthrough(false);
+
+  # Optional fail-safe bypass relay on D1 (GPIO5). The relay's normally-closed
+  # contacts bridge the lines straight through; energizing it routes them via the ESP.
+  # - platform: gpio
+  #   pin: GPIO5
+  #   name: Intercept relay
+  #   restore_mode: ALWAYS_ON
+
+sensor:
+  - platform: wifi_signal
+    name: Wi-Fi signal
+    update_interval: 60s
+  # ESP's own 3.3 V rail. Dips below ~3.0 V mean the AC's 5 V can't keep up.
+  # (Reads the internal VCC, so A0 must stay unconnected.)
+  - platform: adc
+    pin: VCC
+    name: ESP supply voltage
+    entity_category: diagnostic
+    update_interval: 10s
